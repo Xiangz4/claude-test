@@ -1,0 +1,230 @@
+version: '3.8'
+
+services:
+  # =====================================================
+  # PostgreSQL Database - Multi-database setup
+  # =====================================================
+  postgres:
+    image: postgres:14-alpine
+    container_name: fx-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fx_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fx_password}
+      POSTGRES_MULTIPLE_DATABASES: rate_db,transaction_db,channel_db
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d:ro
+      - ./database/migrations:/migrations:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - fx-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fx_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =====================================================
+  # Redis Cache - For rate caching and quote locking
+  # =====================================================
+  redis:
+    image: redis:7-alpine
+    container_name: fx-redis
+    restart: unless-stopped
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - redis_data:/data
+      - ./infrastructure/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - fx-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # =====================================================
+  # RabbitMQ Message Broker - Event bus for microservices
+  # =====================================================
+  rabbitmq:
+    image: rabbitmq:3.11-management-alpine
+    container_name: fx-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-fx_admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-fx_password}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/fx-v1}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./infrastructure/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./infrastructure/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"      # AMQP port
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"  # Management UI
+    networks:
+      - fx-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # =====================================================
+  # Rate Service - Exchange rate management
+  # =====================================================
+  rate-service:
+    build:
+      context: ./services/rate-service
+      dockerfile: Dockerfile
+    container_name: fx-rate-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3001
+      # Database
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: rate_db
+      DATABASE_USER: ${POSTGRES_USER:-fx_user}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-fx_password}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fx_user}:${POSTGRES_PASSWORD:-fx_password}@postgres:5432/rate_db
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_URL: redis://redis:6379
+      # Service Configuration
+      RATE_FETCH_INTERVAL: ${RATE_FETCH_INTERVAL:-60000}  # 60 seconds
+      RATE_CACHE_TTL: ${RATE_CACHE_TTL:-300}  # 5 minutes
+      QUOTE_LOCK_TTL: ${QUOTE_LOCK_TTL:-30}   # 30 seconds
+    ports:
+      - "${RATE_SERVICE_PORT:-3001}:3001"
+    networks:
+      - fx-network
+    volumes:
+      - ./services/rate-service/src:/app/src
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =====================================================
+  # Transaction Service - Order management and processing
+  # =====================================================
+  transaction-service:
+    build:
+      context: ./services/transaction-service
+      dockerfile: Dockerfile
+    container_name: fx-transaction-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3002
+      # Database
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: transaction_db
+      DATABASE_USER: ${POSTGRES_USER:-fx_user}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-fx_password}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fx_user}:${POSTGRES_PASSWORD:-fx_password}@postgres:5432/transaction_db
+      # RabbitMQ
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-fx_admin}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-fx_password}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/fx-v1}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-fx_admin}:${RABBITMQ_PASSWORD:-fx_password}@rabbitmq:5672/${RABBITMQ_VHOST:-/fx-v1}
+      # Service URLs
+      RATE_SERVICE_URL: http://rate-service:3001
+      CHANNEL_SERVICE_URL: http://channel-service:3003
+    ports:
+      - "${TRANSACTION_SERVICE_PORT:-3002}:3002"
+    networks:
+      - fx-network
+    volumes:
+      - ./services/transaction-service/src:/app/src
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =====================================================
+  # Channel Service - External channel integration
+  # =====================================================
+  channel-service:
+    build:
+      context: ./services/channel-service
+      dockerfile: Dockerfile
+    container_name: fx-channel-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3003
+      # Database
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: channel_db
+      DATABASE_USER: ${POSTGRES_USER:-fx_user}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-fx_password}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fx_user}:${POSTGRES_PASSWORD:-fx_password}@postgres:5432/channel_db
+      # Channel API Configuration
+      PHP_CHANNEL_API_URL: ${PHP_CHANNEL_API_URL:-https://api.php-channel.example.com}
+      PHP_CHANNEL_API_KEY: ${PHP_CHANNEL_API_KEY:-}
+      BOCHK_CHANNEL_API_URL: ${BOCHK_CHANNEL_API_URL:-https://mds1a.trkdhs.com/bochkfxibs/mktinfo}
+      LEPTAGE_CHANNEL_API_URL: ${LEPTAGE_CHANNEL_API_URL:-https://api.leptage.example.com}
+      LEPTAGE_CHANNEL_API_KEY: ${LEPTAGE_CHANNEL_API_KEY:-}
+      # Service Configuration
+      CHANNEL_TIMEOUT: ${CHANNEL_TIMEOUT:-30000}  # 30 seconds
+      CHANNEL_RETRY_ATTEMPTS: ${CHANNEL_RETRY_ATTEMPTS:-3}
+    ports:
+      - "${CHANNEL_SERVICE_PORT:-3003}:3003"
+    networks:
+      - fx-network
+    volumes:
+      - ./services/channel-service/src:/app/src
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# =====================================================
+# Networks
+# =====================================================
+networks:
+  fx-network:
+    driver: bridge
+    name: fx-network
+
+# =====================================================
+# Volumes for data persistence
+# =====================================================
+volumes:
+  postgres_data:
+    driver: local
+    name: fx_postgres_data
+  redis_data:
+    driver: local
+    name: fx_redis_data
+  rabbitmq_data:
+    driver: local
+    name: fx_rabbitmq_data
