@@ -1,0 +1,15 @@
+export enum EventType {
+  ORDER_CREATED = 'order_created',
+  ORDER_UPDATED = 'order_updated',
+  ORDER_CANCELLED = 'order_cancelled',
+  FX_INQUIRY_INITIATED = 'fx_inquiry_initiated',
+  FX_INQUIRY_COMPLETED = 'fx_inquiry_completed',
+  FX_EXECUTION_STARTED = 'fx_execution_started',
+  FX_EXECUTION_COMPLETED = 'fx_execution_completed',
+  FX_EXECUTION_FAILED = 'fx_execution_failed',
+  SETTLEMENT_INITIATED = 'settlement_initiated',
+  SETTLEMENT_COMPLETED = 'settlement_completed',
+  SETTLEMENT_FAILED = 'settlement_failed',
+  ORDER_COMPLETED = 'order_completed',
+  ORDER_CLOSED = 'order_closed',
+}
