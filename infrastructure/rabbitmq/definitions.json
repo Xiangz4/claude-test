@@ -1,0 +1,139 @@
+{
+  "rabbit_version": "3.11.0",
+  "rabbitmq_version": "3.11.0",
+  "users": [
+    {
+      "name": "fx_admin",
+      "password_hash": "JCUzJDA1JFVXSjFQMVFGMkJRRk1aR1lCWk1aR1lCWk1aR1lCWk1aR1k=",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": "administrator"
+    }
+  ],
+  "vhosts": [
+    {
+      "name": "/"
+    },
+    {
+      "name": "/fx-v1"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "fx_admin",
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    },
+    {
+      "user": "fx_admin",
+      "vhost": "/fx-v1",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "parameters": [],
+  "global_parameters": [
+    {
+      "name": "cluster_name",
+      "value": "fx-v1-cluster"
+    }
+  ],
+  "policies": [
+    {
+      "vhost": "/fx-v1",
+      "name": "ha-all",
+      "pattern": ".*",
+      "apply-to": "all",
+      "definition": {
+        "ha-mode": "all",
+        "ha-sync-mode": "automatic"
+      },
+      "priority": 0
+    }
+  ],
+  "queues": [
+    {
+      "name": "exchange.order.created",
+      "vhost": "/fx-v1",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    },
+    {
+      "name": "exchange.fx.success",
+      "vhost": "/fx-v1",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    },
+    {
+      "name": "exchange.rate.updated",
+      "vhost": "/fx-v1",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    },
+    {
+      "name": "channel.transaction.completed",
+      "vhost": "/fx-v1",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "classic"
+      }
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "fx.events",
+      "vhost": "/fx-v1",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "bindings": [
+    {
+      "source": "fx.events",
+      "vhost": "/fx-v1",
+      "destination": "exchange.order.created",
+      "destination_type": "queue",
+      "routing_key": "order.created",
+      "arguments": {}
+    },
+    {
+      "source": "fx.events",
+      "vhost": "/fx-v1",
+      "destination": "exchange.fx.success",
+      "destination_type": "queue",
+      "routing_key": "fx.success",
+      "arguments": {}
+    },
+    {
+      "source": "fx.events",
+      "vhost": "/fx-v1",
+      "destination": "exchange.rate.updated",
+      "destination_type": "queue",
+      "routing_key": "rate.updated",
+      "arguments": {}
+    },
+    {
+      "source": "fx.events",
+      "vhost": "/fx-v1",
+      "destination": "channel.transaction.completed",
+      "destination_type": "queue",
+      "routing_key": "channel.transaction.completed",
+      "arguments": {}
+    }
+  ]
+}
